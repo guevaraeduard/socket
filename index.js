@@ -1,177 +1,105 @@
-require("dotenv").config();
 const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+
 const app = express();
-const http = require("http").createServer(app);
-const io = require("socket.io")(http);
-const axios = require("axios");
-
-// Obtener valores de las variables de entorno
-const HOST = process.env.URL_BASE || "localhost";
-
-// Middleware de autenticación
-/*io.use(async (socket, next) => {
-  // Obtener token del handshake
-  const token = socket.handshake.headers.token;
-
-  if (!token) {
-    next(new Error("invalid"));
-  }
-
-  try {
-    // Validar token con el servicio externo
-    const response = await axios.post(
-      `${HOST}/api/app/validate-token`,
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-
-
-      }
-
-    );
-    // Si la validación es exitosa, guardamos la info del usuario
-    if (response.data.process) {
-      console.log(`Usuario ${socket.id} autenticado correctamente`);
-      next();
-    } else {
-      console.log(`Usuario ${socket.id} no autenticado`);
-        next(new Error("invalid"));
-    }
-  } catch (error) {
-    console.log(`Error al validar token del usuario ${socket.id}`);
-    next(new Error("invalid"));
-  }
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "http://localhost:5173", // Cambia esto al origen de tu cliente
+    methods: ["GET", "POST"],
+  },
 });
-*/
 
-// Configuración de Socket.IO
+const players = {}; // Objeto para almacenar playerName y socket.id
+const rooms = {}; // Objeto para almacenar las salas y sus jugadores
+
 io.on("connection", (socket) => {
-  // Objeto para almacenar usuarios y su sala actual
-  const usuariosSalas = new Map(); // { socketId: { sala: string, nombre: string } }
+  console.log("Un usuario se ha conectado:", socket.id);
 
-  socket.on("join_room", (data) => {
-    const { sala, nombre } = data;
-    const userId = socket.id;
+  socket.on("joinRoom", ({ playerName }) => {
+    players[socket.id] = playerName;
+    let user = {
+      id: socket.id,
+      name: playerName,
+      table: [],
+      chance: false,
+    };
 
-    // Si el usuario ya está en una sala, primero lo sacamos
-    if (usuariosSalas.has(userId)) {
-      const salaAnterior = usuariosSalas.get(userId).sala;
-      socket.leave(salaAnterior);
-      socket.broadcast.to(salaAnterior).emit("chat_message", {
-        mensaje: `${nombre} ha abandonado la sala ${salaAnterior}`,
-        userId: userId,
-        sala: salaAnterior,
-      });
+    let roomFound = false;
+    for (const room in rooms) {
+      if (rooms[room].length < 2) {
+        rooms[room].push(user);
+        socket.join(room);
+        console.log(`${playerName} se ha unido a la sala ${room}.`);
+        
+        // Emitir evento a ambos jugadores si la sala está completa
+        if (rooms[room].length === 2) {
+          io.to(room).emit("roomReady", { room, players: rooms[room] });
+        }
+        
+        roomFound = true;
+        break;
+      }
     }
 
-    // Actualizamos la información del usuario
-    usuariosSalas.set(userId, { sala, nombre });
-    socket.join(sala);
-
-    console.log(`Usuario ${userId} (${nombre}) unido a la sala: ${sala}`);
-    console.log(
-      "Estado actual de usuarios y salas:",
-      mapToObject(usuariosSalas)
-    );
-
-    socket.broadcast.to(sala).emit("chat_message", {
-      mensaje: `${nombre} se unió a la sala ${sala}`,
-      userId: userId,
-      sala: sala,
-    });
-  });
-
-  socket.on("chat_message", (data) => {
-    const { mensaje, sala, conversationId } = data;
-    const userId = socket.id;
-    const usuario = usuariosSalas.get(userId);
-
-    if (usuario && usuario.sala === sala) {
-      socket.broadcast.to(sala).emit("chat_message", {
-        mensaje: mensaje,
-        userId: userId,
-        nombre: usuario.nombre,
-        sala: sala,
-      });
+    if (!roomFound) {
+      const newRoom = `room-${Object.keys(rooms).length + 1}`;
+      rooms[newRoom] = [user];
+      socket.join(newRoom);
+      console.log(`${playerName} ha creado y se ha unido a la sala ${newRoom}.`);
+      
+      // Emitir evento al jugador que está esperando
+      socket.emit("waitingForPlayer", { room: newRoom });
     }
-    io.emit("reload_users", { conversationId });
   });
 
-  socket.on("leave_room", () => {
-    const userId = socket.id;
-    const usuario = usuariosSalas.get(userId);
-
-    if (usuario) {
-      const { sala, nombre } = usuario;
-      socket.leave(sala);
-      usuariosSalas.delete(userId);
-
-      console.log(`Usuario ${userId} (${nombre}) salió de la sala: ${sala}`);
-      socket.broadcast.to(sala).emit("chat_message", {
-        mensaje: `${nombre} ha abandonado la sala ${sala}`,
-        userId: userId,
-        sala: sala,
-      });
+  socket.on("cancel-room", () => {
+    console.log("El usuario "+ socket.id + " ha solicitado cancelar la sala");
+  
+    for (const room in rooms) {
+      const userIndex = rooms[room].findIndex(user => user.id === socket.id);
+      if (userIndex !== -1) {
+        rooms[room].splice(userIndex, 1);
+        socket.leave(room);
+        console.log(`El usuario ${socket.id} ha salido de la sala ${room}.`);
+        if (rooms[room].length === 1) {
+          const remainingUser = rooms[room][0];
+          io.to(remainingUser.id).emit("opponentDisconnected", { message: "¡Felicidades! Has ganado porque tu oponente se ha desconectado." });
+        }else{
+           // Si la sala está vacía, eliminarla
+          delete rooms[room];
+          console.log(`La sala ${room} ha sido eliminada porque está vacía.`);
+        }
+    
+        break;
+      }
     }
   });
 
   socket.on("disconnect", () => {
-    const userId = socket.id;
-    const usuario = usuariosSalas.get(userId);
+    console.log("Un usuario se ha desconectado:", socket.id);
+    delete players[socket.id];
 
-    if (usuario) {
-      const { sala, nombre } = usuario;
-      console.log(
-        `Usuario ${userId} (${nombre}) desconectado de la sala: ${sala}`
-      );
-      socket.broadcast.to(sala).emit("chat_message", {
-        mensaje: `${nombre} se ha desconectado`,
-        userId: userId,
-        sala: sala,
-      });
-      usuariosSalas.delete(userId);
-    }else{
-      console.log(`Usuario ${userId} desconectado pero no estaba en ninguna sala`);
+    for (const room in rooms) {
+      const userIndex = rooms[room].findIndex(user => user.id === socket.id);
+      if (userIndex !== -1) {
+        rooms[room].splice(userIndex, 1);
+        // Emitir evento al usuario restante en la sala
+        if (rooms[room].length === 1) {
+          const remainingUser = rooms[room][0];
+          io.to(remainingUser.id).emit("opponentDisconnected", { message: "¡Felicidades! Has ganado porque tu oponente se ha desconectado." });
+        }
+
+        if (rooms[room].length === 0) {
+          delete rooms[room];
+        }
+        break;
+      }
     }
   });
-
-  socket.on("user_connected", (data) => {
-    const { userId, sala, nombre } = data;
-    
-    // Verificar si el usuario ya está en una sala
-    if (usuariosSalas.has(userId)) {
-      console.log(`Usuario ${userId} ya está conectado en una sala`);
-      return;
-    }
-
-    // Agregar usuario a la sala
-    usuariosSalas.set(userId, { sala, nombre });
-    socket.join(sala);
-
-    console.log(`Usuario ${userId} (${nombre}) conectado a la sala: ${sala}`);
-    
-    // Notificar a otros usuarios en la sala
-    socket.broadcast.to(sala).emit("chat_message", {
-      mensaje: `${nombre} se ha unido a la sala ${sala}`,
-      userId: userId,
-      sala: sala
-    });
-  });
-
-  // Función auxiliar para convertir Map a objeto para logging
-  function mapToObject(map) {
-    const obj = {};
-    for (const [key, value] of map.entries()) {
-      obj[key] = value;
-    }
-    return obj;
-  }
 });
 
-// Iniciar servidor
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-  console.log(`Servidor corriendo en puerto ${PORT}`);
+server.listen(3000, () => {
+  console.log("Servidor escuchando en el puerto 3000");
 });
