@@ -23,7 +23,7 @@ io.on("connection", (socket) => {
       id: socket.id,
       name: playerName,
       table: [],
-      chance: false,
+      your: false,
     };
 
     let roomFound = false;
@@ -37,7 +37,6 @@ io.on("connection", (socket) => {
         if (rooms[room].length === 2) {
           io.to(room).emit("roomReady", { room, players: rooms[room] });
         }
-
         roomFound = true;
         break;
       }
@@ -45,6 +44,7 @@ io.on("connection", (socket) => {
 
     if (!roomFound) {
       const newRoom = `room-${socket.id}`;
+      user.your = true;
       rooms[newRoom] = [user];
       socket.join(newRoom);
       console.log(`${socket.id} ha creado y se ha unido a la sala ${newRoom}.`);
@@ -143,7 +143,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("shot", ({ room, cell }) => {
-    console.log(`Evento shop recibido de ${socket.id} para la sala ${room}.`);
+    console.log(`Evento shot recibido de ${socket.id} para la sala ${room}.`);
 
     if (rooms[room]) {
       const userIndex = rooms[room].findIndex((user) => user.id === socket.id);
@@ -154,9 +154,11 @@ io.on("connection", (socket) => {
         const cellIndex = cell.y * 10 + cell.x; // Calcula el índice basado en las coordenadas
         let hit = false;
         let miss = false;
+        let your = false;
         if (opponentTable[cellIndex].ships) {
           opponentTable[cellIndex].hit = true;
           hit = true;
+          your = true;
           console.log(`Hit at (${cell.x}, ${cell.y})`);
         } else {
           opponentTable[cellIndex].miss = true;
@@ -167,11 +169,34 @@ io.on("connection", (socket) => {
           x: cell.x,
           y: cell.y,
           hit,
-          miss
-        }
-        socket.broadcast.to(room).emit("shot-received",  data );
-        socket.emit('shot-send', data)
+          miss,
+        };
 
+        socket.broadcast.to(room).emit("shot-received", data, !your);
+        socket.emit("shot-send", data, your);
+
+        const allShipsHit = opponentTable.every(
+          (cell) => !cell.ships || (cell.ships && cell.hit)
+        );
+
+        if (allShipsHit) {
+          socket.broadcast.to(room).emit("loss-game");
+          socket.emit("winner-game", {
+            message: "Felicidades Has Ganado El Juego",
+          });
+          console.log(
+            `El usuario ${socket.id} ha ganado el juego en la sala ${room}.`
+          );
+
+          rooms[room].forEach((user) => {
+            // io.to(user.id).emit("roomDeleted", { message: "La sala ha sido eliminada." });
+            io.sockets.sockets.get(user.id).leave(room);
+          });
+
+          // Eliminar la sala
+          delete rooms[room];
+          console.log(`La sala ${room} ha sido eliminada.`);
+        }
       } else {
         console.log(`Usuario u oponente no encontrado en la sala ${room}.`);
       }
@@ -181,6 +206,6 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(3000, () => {
-  console.log("Servidor escuchando en el puerto 3000");
+server.listen(3001, () => {
+  console.log("Servidor escuchando en el puerto 3001");
 });
