@@ -31,47 +31,47 @@ io.on("connection", (socket) => {
       if (rooms[room].length < 2) {
         rooms[room].push(user);
         socket.join(room);
-        console.log(`${playerName} se ha unido a la sala ${room}.`);
-        
+        console.log(`${socket.id} se ha unido a la sala ${room}.`);
+        console.log(rooms[room]);
         // Emitir evento a ambos jugadores si la sala está completa
         if (rooms[room].length === 2) {
           io.to(room).emit("roomReady", { room, players: rooms[room] });
         }
-        
+
         roomFound = true;
         break;
       }
     }
 
     if (!roomFound) {
-      const newRoom = `room-${Object.keys(rooms).length + 1}`;
+      const newRoom = `room-${socket.id}`;
       rooms[newRoom] = [user];
       socket.join(newRoom);
-      console.log(`${playerName} ha creado y se ha unido a la sala ${newRoom}.`);
-      
-      // Emitir evento al jugador que está esperando
-      socket.emit("waitingForPlayer", { room: newRoom });
+      console.log(`${socket.id} ha creado y se ha unido a la sala ${newRoom}.`);
     }
   });
 
   socket.on("cancel-room", () => {
-    console.log("El usuario "+ socket.id + " ha solicitado cancelar la sala");
-  
+    console.log("El usuario " + socket.id + " ha solicitado cancelar la sala");
+
     for (const room in rooms) {
-      const userIndex = rooms[room].findIndex(user => user.id === socket.id);
+      const userIndex = rooms[room].findIndex((user) => user.id === socket.id);
       if (userIndex !== -1) {
         rooms[room].splice(userIndex, 1);
         socket.leave(room);
         console.log(`El usuario ${socket.id} ha salido de la sala ${room}.`);
         if (rooms[room].length === 1) {
           const remainingUser = rooms[room][0];
-          io.to(remainingUser.id).emit("opponentDisconnected", { message: "¡Felicidades! Has ganado porque tu oponente se ha desconectado." });
-        }else{
-           // Si la sala está vacía, eliminarla
+          socket.to(remainingUser.id).emit("opponentDisconnected", {
+            message:
+              "¡Felicidades! Has ganado porque tu oponente se ha desconectado.",
+          });
+        } else {
+          // Si la sala está vacía, eliminarla
           delete rooms[room];
           console.log(`La sala ${room} ha sido eliminada porque está vacía.`);
         }
-    
+
         break;
       }
     }
@@ -82,20 +82,101 @@ io.on("connection", (socket) => {
     delete players[socket.id];
 
     for (const room in rooms) {
-      const userIndex = rooms[room].findIndex(user => user.id === socket.id);
+      const userIndex = rooms[room].findIndex((user) => user.id === socket.id);
       if (userIndex !== -1) {
         rooms[room].splice(userIndex, 1);
         // Emitir evento al usuario restante en la sala
         if (rooms[room].length === 1) {
           const remainingUser = rooms[room][0];
-          io.to(remainingUser.id).emit("opponentDisconnected", { message: "¡Felicidades! Has ganado porque tu oponente se ha desconectado." });
+          socket.to(remainingUser.id).emit("opponentDisconnected", {
+            message:
+              "¡Felicidades! Has ganado porque tu oponente se ha desconectado.",
+          });
         }
 
         if (rooms[room].length === 0) {
+          console.log("Sala eliminada " + room);
           delete rooms[room];
         }
         break;
       }
+    }
+  });
+
+  socket.on("delete-room", ({ room }) => {
+    console.log("Solicitud para eliminar la sala:", room);
+
+    if (rooms[room]) {
+      // Desconectar a todos los usuarios de la sala
+      rooms[room].forEach((user) => {
+        // io.to(user.id).emit("roomDeleted", { message: "La sala ha sido eliminada." });
+        io.sockets.sockets.get(user.id).leave(room);
+      });
+
+      // Eliminar la sala
+      delete rooms[room];
+      console.log(`La sala ${room} ha sido eliminada.`);
+    } else {
+      console.log(`La sala ${room} no existe.`);
+    }
+  });
+
+  socket.on("fillTable", ({ room, table }) => {
+    console.log(
+      `Evento fillTable recibido de ${socket.id} para la sala ${room}.`
+    );
+
+    if (rooms[room]) {
+      const userIndex = rooms[room].findIndex((user) => user.id === socket.id);
+      if (userIndex !== -1) {
+        rooms[room][userIndex].table = table;
+        console.log(
+          `Tabla actualizada para el usuario ${socket.id} en la sala ${room}.`
+        );
+        //console.log(table);
+      } else {
+        console.log(`Usuario ${socket.id} no encontrado en la sala ${room}.`);
+      }
+    } else {
+      console.log(`La sala ${room} no existe.`);
+    }
+  });
+
+  socket.on("shot", ({ room, cell }) => {
+    console.log(`Evento shop recibido de ${socket.id} para la sala ${room}.`);
+
+    if (rooms[room]) {
+      const userIndex = rooms[room].findIndex((user) => user.id === socket.id);
+      const opponentIndex = userIndex === 0 ? 1 : 0;
+
+      if (userIndex !== -1 && rooms[room][opponentIndex]) {
+        const opponentTable = rooms[room][opponentIndex].table;
+        const cellIndex = cell.y * 10 + cell.x; // Calcula el índice basado en las coordenadas
+        let hit = false;
+        let miss = false;
+        if (opponentTable[cellIndex].ships) {
+          opponentTable[cellIndex].hit = true;
+          hit = true;
+          console.log(`Hit at (${cell.x}, ${cell.y})`);
+        } else {
+          opponentTable[cellIndex].miss = true;
+          miss = true;
+          console.log(`Miss at (${cell.x}, ${cell.y})`);
+        }
+        let data = {
+          x: cell.x,
+          y: cell.y,
+          hit,
+          miss
+        }
+        socket.broadcast.to(room).emit("shot-received",  data );
+        socket.emit('shot-send', data)
+
+      } else {
+        console.log(`Usuario u oponente no encontrado en la sala ${room}.`);
+      }
+    } else {
+      console.log(`La sala ${room} no existe.`);
     }
   });
 });
