@@ -206,6 +206,6 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(3001, () => {
-  console.log("Servidor escuchando en el puerto 3001");
+server.listen(3000, () => {
+  console.log("Servidor escuchando en el puerto 3000");
 });
