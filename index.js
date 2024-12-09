@@ -151,7 +151,7 @@ io.on("connection", (socket) => {
 
       if (userIndex !== -1 && rooms[room][opponentIndex]) {
         const opponentTable = rooms[room][opponentIndex].table;
-        const cellIndex = cell.y * 10 + cell.x; // Calcula el índice basado en las coordenadas
+        const cellIndex = cell.x * 10 + cell.y; // Calcula el índice basado en las coordenadas
         let hit = false;
         let miss = false;
         let your = false;
